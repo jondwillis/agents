@@ -27,6 +27,23 @@ def anti_pattern_penalty(count: int) -> float:
     return max(0.5, 1.0 - 0.05 * count)
 
 
+def _skill_uses_description_trigger(skill: ParsedSkill) -> bool:
+    """Return True if the skill relies on its description to be auto-invoked.
+
+    Skills that opt out of model-driven invocation (`disable-model-invocation:
+    true`) or that auto-load on a path glob (`paths:` frontmatter) use a
+    different trigger mechanism and should not be checked for a "Use when …"
+    phrase in the description.
+    """
+    fm = skill.frontmatter
+    if fm.get("disable-model-invocation") is True:
+        return False
+    paths = fm.get("paths")
+    if paths is not None and paths != "":
+        return False
+    return True
+
+
 # Line count threshold for BLOATED_SKILL (no references/ dir)
 _BLOATED_LINE_THRESHOLD = 800
 
@@ -129,21 +146,27 @@ class StaticAnalyzer:
                 )
             )
 
-        # MISSING_TRIGGER: no "Use when..." or "Use this skill when..." phrasing
-        trigger_pattern = (
-            r"\buse\s+(?:this\s+skill\s+)?when\b|\buse\s+proactively\b|\btrigger\s+when\b"
-        )
-        if not re.search(trigger_pattern, skill.description, re.IGNORECASE):
-            patterns.append(
-                AntiPattern(
-                    flag="MISSING_TRIGGER",
-                    description=(
-                        'Skill description lacks a "Use when..." trigger phrase. '
-                        "Without it, the model cannot determine when to invoke the skill."
-                    ),
-                    severity=0.15,
-                )
+        # MISSING_TRIGGER: no "Use when..." or "Use this skill when..." phrasing.
+        # Only applies to skills the model is expected to auto-invoke from the
+        # description. Skills that are slash-only (`disable-model-invocation:
+        # true`) or path-triggered (`paths:` frontmatter) use a different
+        # invocation mechanism and should not be penalised for lacking a
+        # description-level trigger phrase.
+        if _skill_uses_description_trigger(skill):
+            trigger_pattern = (
+                r"\buse\s+(?:this\s+skill\s+)?when\b|\buse\s+proactively\b|\btrigger\s+when\b"
             )
+            if not re.search(trigger_pattern, skill.description, re.IGNORECASE):
+                patterns.append(
+                    AntiPattern(
+                        flag="MISSING_TRIGGER",
+                        description=(
+                            'Skill description lacks a "Use when..." trigger phrase. '
+                            "Without it, the model cannot determine when to invoke the skill."
+                        ),
+                        severity=0.15,
+                    )
+                )
 
         # BLOATED_SKILL: >800 lines without a references/ directory
         if skill.line_count > _BLOATED_LINE_THRESHOLD and not skill.has_references:
